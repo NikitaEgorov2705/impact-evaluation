@@ -1,0 +1,504 @@
+---
+title: "Does Education Affect Wages? A Causal Analysis Using 1985 CPS Data"
+output: html_notebook
+---
+
+In this notebook, we will perform a causal analysis using observational data from the 1985 Current Population Survey (CPS).
+
+The goal of this analysis is to estimate the causal effect of education on wages, taking into account potential confounding variables.
+
+The dataset contains information on various demographic, economic, and labor-related variables.
+
+```{r}
+CPS = read.csv("CPS1985.csv")
+```
+
+## Exploratory Analysis
+```{r}
+head(CPS, 10)
+```
+The dataset includes 12 variables that capture individual social and economic characteristics. These variables can be categorized as follows:
+
+*Numerical Variables:*
+
+- wage: The wage of the individual.
+
+- education: The number of years of education.
+
+- experience: The number of years of work experience.
+
+- age: The age of the individual.
+
+*Categorical Variables:*
+
+- ethnicity: The ethnicity of the individual.
+
+- region: The region where the individual lives.
+
+- gender: The gender of the individual.
+
+- occupation: The occupation of the individual.
+
+- sector: The sector of employment.
+
+- union: Union membership status.
+
+- married: Marital status.
+
+
+
+```{r}
+print(colSums(is.na(CPS)))
+```
+There's no missing values across variables, so we can proceed with the analysis.
+
+Let's see the distribution of quantitative variables.
+
+```{r}
+numerical_vars <- c("wage", "education", "experience", "age")
+summary(CPS[numerical_vars])
+print(paste("Sample size:", nrow(CPS)))
+```
+
+We can observe that the dataset includes 534 adult people of age ranging from 18 to 64 years, with 2 to 18 years of education and 0 to 55 years of work experience, so the variability among the observed sample of individuals is quite large. The same applies to wages: they range from 1 to 44.5 dollars per hour.
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+# install.packages("ggiraph")
+library(ggiraph)
+library(plotly)
+
+CPS_long <- CPS %>%
+  pivot_longer(cols = c(wage, education, experience, age), names_to = "variable_name", values_to = "value")
+
+quantiles <- CPS_long %>%
+  group_by(variable_name) %>%
+  summarise(
+    Q1 = quantile(value, 0.25),
+    Median = quantile(value, 0.50),
+    Q3 = quantile(value, 0.75)
+  )
+
+density_plots <- ggplot(data = CPS_long, aes(x = value)) +
+  geom_density(fill = "steelblue", color = "black", alpha = 0.7) +
+  facet_wrap(~ variable_name, scales = "free") +
+  labs(title = "Distribution of Numerical Variables", x = NULL, y = "Frequency") +
+  theme_minimal() +
+  geom_vline(data = quantiles, aes(xintercept = Q1), color = "blue", linetype = "dashed", size = 0.5) +
+  geom_vline(data = quantiles, aes(xintercept = Median), color = "red", linetype = "dashed", size = 1) +
+  geom_vline(data = quantiles, aes(xintercept = Q3), color = "blue", linetype = "dashed", size = 0.5)
+
+ggplotly(density_plots, width = 800, height = 600)
+```
+As we can see from the plots, the distribution of wages, experience and age is right-skewed, meaning that most individuals have lower values for these variables. The distribution of education is more evenly spread, having median value at around 12 years of education.
+
+Since the variables are skewed, there might be some outliers. Let's have a look at the boxplots to see if there are any.
+
+```{r}
+boxplots <- ggplot(CPS_long, aes(x = variable_name, y = value)) +
+  geom_boxplot(fill = "steelblue", color = "black", alpha = 0.7) +
+  facet_wrap(~ variable_name, scales = "free", ncol = 4) +
+  labs(title = "Distribution of Numerical Variables", x = NULL, y = "Value") +
+  theme_minimal()
+
+ggplotly(boxplots, width = 800, height = 600)
+```
+
+There are visible outliers in the data:
+
+- Education: there are people who have less than 8 years of education, which probably means they finished only a part of primary education. The number of such observations is not high and we assume that these are valid data points, since a small fraction of population indeed might not finish school.
+
+- Experience: there are a couple of observations with more than 49 years of work experience (which is the 75% quantile of the data). A older fraction of population could in fact start their careers early and have a long work experience, so we don't consider these observations problematic outliers, given that the maximum age within the sample is 64 years.
+
+- Wage: there are a few observations with wages higher than 30 dollars per hour. The wage distribution normally is right-skewed, so these observations are not problematic outliers, but rather a low number of high earners.
+
+
+## Correlations between wages, education, experience, and age
+
+Let's now observe the corellation between the numerical variables of interest.
+
+```{r}
+numerical_vars_df <- CPS[numerical_vars]
+
+correlation_matrix <- cor(numerical_vars_df)
+
+correlation_matrix_long <- as.data.frame(correlation_matrix) %>%
+  rownames_to_column(var = "Var1") %>%
+  gather(key = "Var2", value = "value", -Var1) %>%
+  filter(Var1 != Var2) %>%
+  filter(!duplicated(paste(pmin(Var1, Var2), pmax(Var1, Var2))))
+
+
+print(correlation_matrix_long)
+```
+The independent variable of interest - Wage - is positively correlated with other three numerical variables with the strongest correlation for education (~0.4). Surprisingly, years of experience and age and not strongly correlated with Wage.
+
+The strongest positive correlation is observable between age and work experience, which is not suprising if we assume that almost all individuals were working throughout their lives.
+
+What is also interesting is that education is not strongly correlated with experience, which might indicate that people with higher education levels might not necessarily have more work experience (it makes sense if we assume that individuals who were getting their education for a longer time, might start working later).
+
+Let's graphically represent the relationships between wage and education, experience, and age.
+
+We chose to apply the Loess smoothing method to this plot because it this method in non-perametric and does not assume a linear relationship between the variables. Instead, Loess fits a smoothed curve that best describes the relationship, allowing us to explore potential non-linear patterns in the data more closely. This approach is particularly suitable since we are uncertain about the exact trend of the relationship.
+
+Additionally, the dataset's relatively small size means that individual data points can have a significant impact. By using Loess, which is sensitive to outliers and local variations, we can better understand how these factors influence the overall trend between wage and education.
+
+```{r}
+scatterplot_education <- ggplot(CPS, aes(x = education, y = wage)) +
+  geom_point(size=1) +
+ geom_smooth(method="auto", se=TRUE, fullrange=FALSE, level=0.95) +
+  labs(title = "Education And Wage Relationship",
+       x = "Years of Education",
+       y = "Wage") +
+  theme_minimal()
+
+ggplotly(scatterplot_education, width = 800, height = 600)
+```
+
+If we consider the scatterplot of wage and education, we can observe a positive relationship between the two variables, that was previously observed in the correlation matrix. Furthermore, the trend is rather consistent and the variability is not too high, which indicates that the relationship might be quite strong. The consistently increasing upward slope might signal that there is also no dimishing returns to more years of educations, at least in the sectors and the occupations that we observe in this dataset. 
+
+```{r}
+scatterplot_experience <- ggplot(CPS, aes(x = experience, y = wage)) +
+  geom_point(size=1) +
+ geom_smooth(method="auto", se=TRUE, fullrange=FALSE, level=0.95) +
+  labs(title = "Experience And Wage Relationship",
+       x = "Years of Experience",
+       y = "Wage") +
+  theme_minimal()
+
+ggplotly(scatterplot_experience, width = 800, height = 600)
+```
+
+Compared to education, work experience does not show a clear relationship with wage: variability is so high that it makes the graph visually noisy and without a clear distinguishable trend. This is consistent with the correlation matrix, which showed a weaker correlation between wage and experience compared to education.
+
+Speaking of a trend in the fitted line - there is an upward slope from 0 to ~12 years of experiences which is follwed by the flat line. It might signal that the positive linearity of the relationship is not constant across the whole career and is higher in first 10-15 years of work experience, on average. There's also a significant drop in wage for individuals with more than ~40 years of experience, but the number of observations are relatively low in this age agroup and the variability is so high that it does not allow to make any preliminary conclusions.
+
+Since age is highly correlated with experience, we can expect similar results for the relationship between wage and age on average, but the exact trends might differ, so it might be useful to plot it as well:
+
+```{r}
+scatterplot_age <- ggplot(CPS, aes(x = age, y = wage)) +
+  geom_point(size=1) +
+ geom_smooth(method="auto", se=TRUE, fullrange=FALSE, level=0.95) +
+  labs(title = "Experience And Wage Relationship",
+       x = "Age",
+       y = "Wage") +
+  theme_minimal()
+
+ggplotly(scatterplot_age, width = 800, height = 600)
+```
+As with the relationship between wage and experience, the relationship between wage and age is not exactly linearly positive. The fitted line shows a slight upward slope from 18 to 35 years of age, which is followed by a stagnation. It might indicate that wage gains are higher in first years of career, but then the wage does not grow or even decrease a bit. It is also consistent with the trend that we observed between wage and years of experience.
+
+## Distribution of Wages Across Different Social Groups
+
+Let's have a closer look at the qualitative categories that we have in this dataset.
+
+```{r}
+categorical_vars <- c("ethnicity", "region", "gender", "occupation", "sector", "union", "married")
+
+for (var in categorical_vars) {
+  cat("Categories in", var, ":\n")
+  print(unique(CPS[[var]]))
+  cat("\n")
+}
+```
+It might be interesting to observe differences in wage distribution across different social groups separately.
+
+**Sectors and Occupations**
+
+Let's start with professional occupations and sectors.
+
+We suspect that there is a significant difference in wages among individuals in different occupations and industries, since some sectors and occupations require more advanced and/or specialized skills than others.
+
+```{r}
+wage_by_sector <- ggplot(CPS, aes(x = sector, y = wage)) +
+  geom_boxplot(fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Wages Across Sectors",
+       x = "Sector",
+       y = "Wage") +
+  theme_minimal()
+
+ggplotly(wage_by_sector, width = 800, height = 600)
+```
+Median and interquartile ranges are quite close across sectors. As it could have been expected, "other" category (which includes all data points outside of construction and manufacturing) have the largest and biggest outliers, but the lowest median. Construction sector has the highest median wage and the lowest variability in wages.
+
+```{r}
+summary_sectors <- CPS %>%
+  group_by(sector) %>%
+  summarise(
+    Mean = mean(wage),
+    Median = median(wage),
+    SD = sd(wage),
+    IQR = IQR(wage, na.rm = TRUE),
+    Count = n()
+  )
+
+summary_sectors
+```
+Despite significant difference in number of observations across sectors ("other" category is significantly larger in number of observations), the sectors appear to be comparable in terms of mean and median.
+
+The standard deviation is the highest in the "other" category, which is consistent with the boxplot. The construction sector has the lowest standard deviation.
+
+According to the calculated IQRs across sectors, manufacturing has the highest variability of the middle 50% of the data, which is consistent with the boxplot. Construction sector has the lowest variability, which is also consistent with the boxplot.
+
+Overall, despire rather closed measures of central tendency, the measures of variability are quite different across sectors, which might indicate that sector of employemtn is an important predictor of wage level.
+
+It is also likely to be a *common cause confounder* for the relationship between education and wages, since people working in different sectors might have different levels of education and wages. it might be especially the case for "other" category since it includes a wide variety of industries.
+
+
+```{r}
+# install.packages("forcats")
+library(forcats)
+library(dplyr)
+
+CPS <- CPS %>%
+  mutate(occupation = fct_reorder(occupation, wage, .fun = median))
+
+wage_by_occupation <- ggplot(CPS, aes(x = occupation, y = wage)) +
+  geom_boxplot(fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Wages Across Occupations",
+       x = "Occupation",
+       y = "Wage") +
+  theme_minimal()
+
+ggplotly(wage_by_occupation, width = 800, height = 600)
+```
+
+```{r}
+summary_occupations <- CPS %>%
+  group_by(occupation) %>%
+  summarise(
+    Mean = mean(wage),
+    Median = median(wage),
+    SD = sd(wage),
+    IQR = IQR(wage, na.rm = TRUE),
+    Count = n()
+  )
+
+summary_occupations
+```
+Highest median and interquartile ranges are observable in the Management and Technical groups, which means they have higher hourly wage for a "typical" worker as well as larger variability in wages. These two types of occupations often require advanced level education and specialized skills, which can explain the higher wages.
+
+Worker and Sales occupations have quite long tails with relatively small numbers of very high earners. Successful sales specialists can have high incomes from commissions, while some highly qualified workers can have much higher hourly wages, than average workers due to their high level or highly specialized skills.
+
+Overall, there is quite high variability, average and median differences in wages across these groups, which might indicate that occupation is a very important predictor of wage level. It is also likely to be a *common cause confounder* for the relationship between education and wages, since people with higher education levels might be more likely to work in higher paid sectors and occupations (it especially holds true for management and technical groups that might require advanced level education).
+
+**Ethnic groups**
+
+Let's now observe the distribution of wages across different demographic groups.
+
+```{r}
+CPS <- CPS %>%
+  mutate(ethnicity = fct_reorder(ethnicity, wage, .fun = median))
+
+wage_by_ethnicity <- ggplot(CPS, aes(x = ethnicity, y = wage)) +
+  geom_boxplot(fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Wages Across Ethnic Groups",
+       x = "Occupation",
+       y = "Wage") +
+  theme_minimal()
+
+ggplotly(wage_by_ethnicity, width = 800, height = 600)
+```
+
+```{r}
+summary_ethnicity <- CPS %>%
+  group_by(ethnicity) %>%
+  summarise(
+    Mean = mean(wage),
+    Median = median(wage),
+    SD = sd(wage),
+    IQR = IQR(wage, na.rm = TRUE),
+    Count = n()
+  )
+
+summary_ethnicity
+```
+Caucasians have both the highest median wage and the highest variability in wages.
+
+Higher variability can be explained by the fact that the majority of the sample is Caucasian, so the distribution of wages is more spread out. Additionally, there might structural differences in incomes between different ethnic groups. For instance, non-white minorities have lower access to higher paid sectors and occupations, which can lead to lower wages.
+
+
+```{r}
+library(RColorBrewer)
+
+ethnicity_colors <- c("hispanic" = "brown4", "other" = "darkgoldenrod", "cauc" = "cadetblue")
+
+ethnicity_occupation_plot <- ggplot(CPS, aes(x = occupation, fill = ethnicity)) +
+  geom_bar(position = "fill") +
+  labs(title = "Ethnic Composition Across Occupations",
+       x = "Occupation",
+       y = "Proportion",
+       fill = "Ethnicity") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = ethnicity_colors) +
+  theme_minimal()
+
+
+ggplotly(ethnicity_occupation_plot)
+```
+
+As we can see, among occupation groups, non-causasians' proportions are the highest in the office, worker and services occupation groups, which are associated with lower wages, as we saw previously.
+ 
+Generally speaking, ethnic origin might be a very important predictor of a wage level. Additionally, it might also affect the access to education, which means that it is a *common cause confounder*.
+
+**Gender**
+
+Let's observe the distribution of wages across gender. Gender disparity is widely discussed in the economic literature, so it might be interesting to see if there is a wage gap between two genders in this dataset. We would expect a significant difference, especially since the data comes from 80's when gender pay gap was even more pronounced.
+
+```{r}
+wage_by_gender <- ggplot(CPS, aes(x = gender, y = wage)) +
+  geom_boxplot(fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Wages Across Gender Groups",
+       x = "Gender",
+       y = "Wage") +
+  theme_minimal()
+
+ggplotly(wage_by_gender, width = 800, height = 600)
+```
+
+Even though both median and interquartile ranges are higher for males, there is quite a lot of outliers in the female groups, indicating a small number of high earners among females.
+
+```{r}
+summary_gender <- CPS %>%
+  group_by(gender) %>%
+  summarise(
+    Mean = mean(wage),
+    Median = median(wage),
+    SD = sd(wage),
+    IQR = IQR(wage, na.rm = TRUE),
+    Count = n()
+  )
+
+summary_gender
+```
+Despite outliers mentioned earlier, the standard deviation and interquartile range of the male group signal higher variability in wages.
+
+Again, we would expect gender to be a *common cause confounder* for the relationship between education and wages, because it can affect both the access to education, number of years of formal education (due to different social norms and expectations applied to females) and the wage level (due to glass ceilings).
+
+*Location*
+
+The data also allows to observe the differences between regions in terms of wages. The dataset includes 2 categories related to location: south and other. We would expect that there is a wage gap between these two regions, since the South is generally considered to be more rural, less developed, resulting in lower average wages.
+
+```{r}
+wage_by_region <- ggplot(CPS, aes(x = region, y = wage)) +
+  geom_boxplot(fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Wages Across Regions",
+       x = "Region",
+       y = "Wage") +
+  theme_minimal()
+
+ggplotly(wage_by_region, width = 800, height = 600)
+```
+
+It's vividly visible that both the median and the range are higher in the "other" category, which is consistent with the assumption that the South has lower wages.
+
+```{r}
+summary_region <- CPS %>%
+  group_by(region) %>%
+  summarise(
+    Mean = mean(wage),
+    Median = median(wage),
+    SD = sd(wage),
+    IQR = IQR(wage, na.rm = TRUE),
+    Count = n()
+  )
+
+summary_region
+```
+*Unionization*
+
+Unionization is another important factor that can affect wages: union member are protected by the collective agreements and usually have higher wages.
+
+```{r}
+wage_by_union <- ggplot(CPS, aes(x = union, y = wage)) +
+  geom_boxplot(fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Wages Across Union Memberships",
+       x = "Union Membership",
+       y = "Wage") +
+  theme_minimal()
+
+ggplotly(wage_by_union, width = 800, height = 600)
+```
+
+
+
+## Causal Analysis
+
+After preliminary correlation and exploratory analysis, we can now proceed with the hypothesis testing. Education was found to have the highest positive correlation with wages among quantitative variables (correlations between wages and age and experience were weaker). Qualitative variables, such as occupation and sector, also showed some differences in wage distribution and their relationship with wages might be interesting to explore further.
+
+The set of hypotheses is formulated in the following way:
+
+- *Null Hypothesis (H₀): Education has no effect on wages.*
+- *Alternative Hypothesis (H₁): Education has an effect on wages.*
+
+
+Let's have a look at the relationship between the level of education, controlling for experience and age, and wages.
+
+First, since age and experience are highly correlated, we will check for *multicollinearity* between these two variables, using *Variance Inflation Factor (VIF)*. Let's create models with and wothout collinear independent variables and compare the results:
+
+```{r}
+# install.packages("stargazer")
+library(stargazer)
+
+model_numerical_1 <- lm(wage ~ education + experience + age, data = CPS)
+model_numerical_2 <- lm(wage ~ education + experience, data = CPS)
+model_numerical_3 <- lm(wage ~ education + age, data = CPS)
+
+stargazer(model_numerical_1, model_numerical_2, model_numerical_3,
+          type = "text",
+          title = "Wage Vs. Education, Experience & Age",
+          align = TRUE,
+          column.labels = c("All numerical", "w/o Age", "w/o Experience"))
+```
+First model includes all three variables, while the second model includes only education and experience (excluding age). The third model includes only education and age (excluding experience).
+
+First model demonstrates highly inflated standard errors, most likely due to multicollinearity between experience and age.
+
+Both 2nd and 2rd models show and statistical and quite high correlation between education and wage, while the respective coefficients for isolated experience and age variables are quite similar. it is indeed a sign of multicollinearity.
+
+Let's see the Variance Inflation Factor to check the power of multicollinearity in the 1st model:
+
+```{r}
+# install.packages("car")
+library(car)
+
+vif1 <- vif(model_numerical_1)
+print(vif1)
+```
+The calculated VIF is extremely high, which indicates that multicollinearity is a significant issue in the model.
+
+Let's check VIF for the 2nd and 3rd models:
+```{r}
+vif2 <- vif(model_numerical_2)
+print(vif2)
+```
+```{r}
+vif3 <- vif(model_numerical_3)
+print(vif3)
+```
+Both models have VIF values ~1, which is a sign of no multicollinearity.
+
+```{r}
+# install.packages("stargazer")
+library(stargazer)
+
+model_categorical <- lm(wage ~ ethnicity + region + gender + occupation + sector 
++ union + married, data = CPS)
+
+stargazer(model_categorical, type = "text", title = "Wage Vs. Categorical variables", align = TRUE)
+```
+```{r}
+model_numerical <- lm(wage ~ education + experience + age, data = CPS)
+
+stargazer(model_numerical, type = "text", title = "Regression Results", align = TRUE)
+```
+Do outliers affect the results?
+- Cook's Distance 
+- Robustness checks
+
+
+## Limitations
+
+- y is not truly random
+
