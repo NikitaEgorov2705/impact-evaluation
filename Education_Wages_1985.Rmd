@@ -479,24 +479,167 @@ print(vif3)
 ```
 Both models have VIF values ~1, which is a sign of no multicollinearity.
 
+Let's observe the correlations between wage and socio-economic characteristics of the individuals.
+
 ```{r}
-# install.packages("stargazer")
-library(stargazer)
 
 model_categorical <- lm(wage ~ ethnicity + region + gender + occupation + sector 
 + union + married, data = CPS)
 
 stargazer(model_categorical, type = "text", title = "Wage Vs. Categorical variables", align = TRUE)
 ```
-```{r}
-model_numerical <- lm(wage ~ education + experience + age, data = CPS)
+Since it is not an entire model of the relationship we are interested in, we can't make any conclusions about the effect of these variables on wages. However, it is valuable to make preliminary observations on how these common cause confounders correlated with the wages.
 
-stargazer(model_numerical, type = "text", title = "Regression Results", align = TRUE)
+As we can see:
+
+- Being a male is indeed quite likely to be associated with higher wages
+
+- Being of caucausian ethnic origin can be associated with higher wages
+
+- Living in the South can be associated with lower wages
+
+- Having an occupation in the technical and managerial positions can be associated with higher wages
+
+- Being a union member can be associated with higher wages
+
+This check is consistent with the assumptions we had about the confounding variables before. So far the occupation is the strongest predictor of wage level among other confounders. It might also indicate that education indeed translates into higher wages, because technical and manegerial positions usually require higher level of education. At the same time, there is some association with the social position of the individual: ethnicity, location, gender and union membership are also associated with wage level.
+
+
+## Models with confounderd included
+
+Let's run the models with the confounders included. We don't include age due to its high collinearity with experience.
+
+```{r}
+# num + gender
+model_full1 <- lm(wage ~ education + experience + gender, data = CPS)
+# num + ethnicity 
+model_full2 <- lm(wage ~ education + experience + ethnicity, data = CPS)
+# num + gender + ethnicity 
+model_full3 <- lm(wage ~ education + experience + gender + ethnicity, data = CPS)
+
+stargazer(model_full1, model_full2, model_full3, type = "text", title = "Wage Level predictors", align = TRUE)
 ```
+In these models we have added social confounders that are hypethesized to be important:
+
+- Education and experience remain to be statistically significnant predictors of wage level in all models.
+
+- Including gender also shows a rather strong statistically significant relationship: being a male might be associated with higher wages.
+
+- Ethnicity is not found to be significant.
+
+Now, let's examine the model with a categorical variable for occupation included. We expect that this variable will be a significant predictor of wage level, since it is a common cause confounder for the relationship between education and wages.
+```{r}
+model_full4 <- lm(wage ~ education + experience + gender + occupation, data = CPS)
+
+stargazer(model_full1, model_full4, type = "text", title = "Wage Level predictors", align = TRUE)
+```
+In the last model "services" occupation is designated as a reference category. The coefficients for the other categories are interpreted as the difference in wage level compared to "services". Since the "services" had the lowest median and the interquartile range, it is a good fit for a reference category as the group with lowest earnings. As expected, technical and managerial positions are associated with higher wages, increasing the wage by ~2.8 and ~3.8 dollars respectively on average. SO far, this relationship is higher than education, experience and gender.
+
+The model with occupation included shows a jump in R squared (from 0.253 to 0.302) and significant change in the coefficents for education and gender: the magnitude of both coefficents decreased after controlling for the occupation.
+
+There is a chance of collinearity between occupation and education, that should be checked:
+
+```{r}
+vif4 <- vif(model_full4)
+print(vif4)
+```
+Occupation shows low multicollinearity, which is acceptable.
+
+```{r}
+# install.packages("lmtest")
+library(lmtest)
+bptest(model_full1)
+bptest(model_full4)
+```
+Breusch-Pagan test for heteroscedasticity shows that both models have heteroscedasticity, which means that the standard errors are not constant. It might be a sign of omitted variables.
+
+```{r}
+plot(model_full4$fitted.values, model_full4$residuals,
+     main = "Residuals vs Fitted: Model with Gender & Occupation",
+     xlab = "Fitted Values",
+     ylab = "Residuals")
+abline(h = 0, col = "red")
+```
+Let's now add new confounders to the model 4.
+
+```{r}
+model_full5 <- lm(wage ~ education + experience + gender + occupation + sector, data = CPS)
+stargazer(model_full4 ,model_full5, type = "text", title = "Wage Level predictors", align = TRUE)
+```
+Adding sector as a predictor does not seem to produce any significant changes in the model. The coefficients for other predictors remain quite similar, while sector dummy variables are not significant.
+
+```{r}
+model_full6 <- lm(wage ~ education + experience + gender + occupation + region, data = CPS)
+stargazer(model_full4, model_full6, type = "text", title = "Wage Level predictors", align = TRUE)
+```
+Adding region (which shows either living in the North or in the South of the US) as a predictor shows that living in the South is associated with lower wages. It has also slighly altered the magnitude of other predictors, but their coefficients remain significant.
+
+
+```{r}
+model_full7 <- lm(wage ~ education + experience + gender + occupation + region + union, data = CPS)
+stargazer(model_full6, model_full7, type = "text", title = "Wage Level predictors", align = TRUE)
+```
+
+Being a union member appears to have a significant posaitive relationship with the wage level (as was theorized before constructing the model). Adding predictor for union membership has also slightly altered the magnitude of other predictors, but their coefficients still remain significant.
+
+Interestingly, the magnitude affected the most is the occupation: the coefficients for managerial positions have increased. 
+
+```{r}
+model_full8 <- lm(wage ~ education + experience + gender + occupation + region + union + married, data = CPS)
+stargazer(model_full7, model_full8, type = "text", title = "Wage Level predictors", align = TRUE)
+```
+Being married does not appear to be a significant predictor of wage level in this model, which is consistent with our preliminary assumptions.
+
+- Heterscedasticity?
+
+
+##
+
+Education, experience, gender, occupation (in technical, management roles), and union membership are significant predictors of wages. 
+
+```{r}
+library(car)
+print(vif(model_full))
+```
+VIF values are quite low, which indicates that multicollinearity is not an issue in this model, after excluding age.
+
+
+```{r}
+library(ggplot2)
+model_full_residuals <- ggplot(CPS, aes(x = fitted(model_full), y = resid(model_full))) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(x = "Fitted Values", y = "Residuals", title = "Residuals vs. Fitted Values Plot") +
+  theme_minimal()
+
+ggplotly(model_full_residuals, width = 800, height = 600)
+```
+There is widening?
+
+
+
+
+
+There's a number of variables that appeared to be non-significant: sector & marriage. Let's constrcut a model without them and compare the results.
+
+```{r}
+model_wo_marriage_sector_region <- lm(wage ~ education + experience + ethnicity +  gender + occupation + union, data = CPS)
+
+stargazer(model_full, model_wo_marriage_sector_region, type = "text", title = "Wage Level predictors", align = TRUE)
+```
+
+
+
+## Check Model Fit and Diagnostics
+1. overfitting?
+2. Check residuals to ensure the assumptions of linearity, homoscedasticity, and normality hold.
+3.  y - y plot
+4. Consider Interaction Effects
+
+
 Do outliers affect the results?
 - Cook's Distance 
 - Robustness checks
-
 
 ## Limitations
 
