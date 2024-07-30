@@ -590,56 +590,72 @@ stargazer(model_full7, model_full8, type = "text", title = "Wage Level predictor
 ```
 Being married does not appear to be a significant predictor of wage level in this model, which is consistent with our preliminary assumptions.
 
-- Heterscedasticity?
+Let's now compare the model with statistically significant predictors and confounders and the model with all confounders included:
 
+```{r}
+model_full9 <- lm(wage ~ education + experience + gender + occupation + region + union + ethnicity + married + sector, data = CPS)
+stargazer(model_full7, model_full9, type = "text", title = "Wage Level predictors", align = TRUE)
+```
+It seems that controlling for ethnicity, sector of occupation and being married does not affect the model. The coefficients for the other predictors remain quite similar, while the new predictors are not significant. In addition, the adjusted R squared value is almost the same in both models. The same applies to Residual Standard Error, which is quite similar in both models.
 
-##
-
-Education, experience, gender, occupation (in technical, management roles), and union membership are significant predictors of wages. 
+## Model Diagnostics
 
 ```{r}
 library(car)
-print(vif(model_full))
+print(vif(model_full7))
 ```
 VIF values are quite low, which indicates that multicollinearity is not an issue in this model, after excluding age.
+```{r}
+plot(model_full7$fitted.values, residuals(model_full7), 
+     xlab = "Fitted Values", ylab = "Residuals",
+     main = "Residuals vs Fitted Values")
+abline(h = 0, col = "red", lty = 2)
 
+```
+The residuals vs. fitted values plot shows no signs of non-linear distribution of residuals, which is a sign that the model linearity is correctly specified with all introduced variables.
+
+However, due to the widening of the of the scatter, there is a chance that the homoscedasticity assumption is not actually met.
+
+When we previously plotted the distribution of wage, it was right-skewed, which might have caused the residuals to be heteroscedastic. Let's apply the log transformation to the dependent variable and see if it improves the model fit.
 
 ```{r}
-library(ggplot2)
-model_full_residuals <- ggplot(CPS, aes(x = fitted(model_full), y = resid(model_full))) +
-  geom_point() +
-  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-  labs(x = "Fitted Values", y = "Residuals", title = "Residuals vs. Fitted Values Plot") +
+CPS$log_wage <- log(CPS$wage)
+log_wage_plot <- ggplot(CPS, aes(x = log_wage)) +
+  geom_density(fill = "skyblue", color = "black") +
+  labs(title = "Density Plot of Log-Transformed Wage",
+       x = "Log of Wage",
+       y = "Density") +
   theme_minimal()
 
-ggplotly(model_full_residuals, width = 800, height = 600)
+ggplotly(log_wage_plot, width = 800, height = 600)
 ```
-There is widening?
-
-
-
-
-
-There's a number of variables that appeared to be non-significant: sector & marriage. Let's constrcut a model without them and compare the results.
+The distribution of log-transformed wage is more symmetrical and closer to the normal distribution, which might help to solve the problem of heteroscedasticity.
 
 ```{r}
-model_wo_marriage_sector_region <- lm(wage ~ education + experience + ethnicity +  gender + occupation + union, data = CPS)
-
-stargazer(model_full, model_wo_marriage_sector_region, type = "text", title = "Wage Level predictors", align = TRUE)
+model_full7_log <- lm(log_wage ~ education + experience + gender + occupation + region + union, data = CPS)
+stargazer(model_full7, model_full7_log, type = "text", title = "Wage Level predictors", align = TRUE)
 ```
+The residual standard error is much lower in the model with log-transformed wage, which is a sign of a better fit for the data.
+```{r}
+plot(model_full7_log$fitted.values, residuals(model_full7_log), 
+     xlab = "Fitted Values", ylab = "Residuals",
+     main = "Residuals vs Fitted Values")
+abline(h = 0, col = "red", lty = 2)
+```
+The visual check of the transformed model shows that the residuals are evenly distributed around the zero line, which is a sign of homoscedasticity.
 
+```{r}
+qqnorm(residuals(model_full7_log))
+qqline(residuals(model_full7_log))
+```
+The Q-Q plot shows that the residuals are normally distributed, which is a sign that the model assumptions are met.
 
+## TO do
 
-## Check Model Fit and Diagnostics
-1. overfitting?
-2. Check residuals to ensure the assumptions of linearity, homoscedasticity, and normality hold.
-3.  y - y plot
-4. Consider Interaction Effects
-
-
-Do outliers affect the results?
-- Cook's Distance 
-- Robustness checks
+- Interaction term: education and experience
+- Partial Regression Plots
+- overfitting?
+- Do outliers affect the results? Cook's Distance 
 
 ## Limitations
 
