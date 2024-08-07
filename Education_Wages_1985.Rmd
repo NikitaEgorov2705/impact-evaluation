@@ -1,13 +1,12 @@
 ---
-title: "Does Education Affect Wages? A Causal Analysis Using 1985 CPS Data"
+title: "Does Education Affect Wages?"
 output:
-  html_document:
-    df_print: paged
+  html_document
 ---
 
-In this notebook, we will perform a causal analysis using observational data from the 1985 Current Population Survey (CPS).
+In this notebook, we will perform an analysis using observational data from the 1985 Current Population Survey (CPS) from the US.
 
-The goal of this analysis is to estimate the causal effect of education on wages, taking into account potential confounding variables.
+The goal of this analysis is to estimate the effect of education on wages, taking into account potential confounding variables.
 
 The dataset contains information on various demographic, economic, and labor-related variables.
 
@@ -652,8 +651,57 @@ qqline(residuals(model_full7_log))
 ```
 The Q-Q plot shows that the residuals are normally distributed, which is a sign that the model assumptions are met.
 
-## TO do
+```{r}
+par(mfrow=c(2,2))
+plot(model_full7_log)
+```
+```{r}
+print(vif(model_full7_log))
+```
+As with non-log-transformed model, there is no signs of multicollinearity, since we have omitted the age variable.
 
+Let's observe the influential observations in the model.
+
+```{r}
+plot(cooks.distance(model_full7_log), type = "h", pch = 20, main = "Cook's Distance Plot")
+abline(h = 4/length(model_full7_log$residuals), col = "red")
+```
+The plotted Cook's distance shows a number of influential observations. Let's see which observations are the most influential.
+```{r}
+cooks_d <- cooks.distance(model_full7_log)
+influential_points <- which(cooks_d > 4/length(cooks_d))
+print(influential_points)
+```
+```{r}
+influential_data <- CPS[c(15, 76, 105, 108, 166, 168, 171, 179, 200, 220, 231, 237, 247, 277, 339, 354, 356, 379, 410, 414, 416, 469, 476, 478, 482, 495, 533), ]
+print(influential_data)
+```
+As we can see, these observations present the wages outside of the Interquartile Range, getting either below or beyond it. Overall, these are perfectly legitimate data points, so they should not be removed from the dataset. However, it might be valuable to construct a model that is more robust to outliers.
+
+Let's use Robust Linear Model (RLM), since it is less sensitive to extreme values.
+
+```{r}
+library(MASS)
+robust_model_full7_log <- rlm(log_wage ~ education + experience + gender + occupation + region + union, data = CPS)
+stargazer(model_full7_log, robust_model_full7_log, type = "text", title = "Wage Level predictors", align = TRUE)
+```
+The coefficients of the model are quite similar to the OLS model and so are the standard errors.
+
+- an additional year of education is associated with a ~7% *increase* in wage
+
+- an additional year of experience is associated with a ~1% *increase* in wage
+
+- being a male is associated with ~20-25% *higher* wage, compared to being a female
+
+- working in technical and managerial occupation is associated with ~43% and ~49% *higher* wage, respectively, compared to working in services occupations.
+
+- living in the South is associated with a *decrease* in wages of 10-12% compared to the North.
+
+- being a union member is associated with an *increase* in wages of ~23% compared to non-union members.
+
+## To do
+
+- comparisons of the categorical vs continuous variables' controbution
 - Interaction term: education and experience
 - Partial Regression Plots
 - overfitting?
@@ -662,4 +710,3 @@ The Q-Q plot shows that the residuals are normally distributed, which is a sign 
 ## Limitations
 
 - y is not truly random
-
